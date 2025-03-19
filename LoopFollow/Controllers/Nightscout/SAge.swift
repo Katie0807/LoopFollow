@@ -27,15 +27,15 @@ extension MainViewController {
                     self.updateSage(data: data)
                 }
             case .failure(let error):
-                print("Failed to fetch data: \(error.localizedDescription)")
+                LogManager.shared.log(category: .nightscout, message: "webLoadNSSage, failed to fetch data: \(error.localizedDescription)")
             }
         }
     }
     
     // NS Sage Response Processor
     func updateSage(data: [sageData]) {
-        self.clearLastInfoData(index: 6)
-        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Process/Display: SAGE") }
+        infoManager.clearInfoData(type: .sage)
+
         if data.count == 0 {
             return
         }
@@ -49,28 +49,27 @@ extension MainViewController {
                                    .withColonSeparatorInTime]
         UserDefaultsRepository.alertSageInsertTime.value = formatter.date(from: (lastSageString))?.timeIntervalSince1970 as! TimeInterval
         
-        if UserDefaultsRepository.alertAutoSnoozeCGMStart.value && (dateTimeUtils.getNowTimeIntervalUTC() - UserDefaultsRepository.alertSageInsertTime.value < 7200){
+        if UserDefaultsRepository.alertAutoSnoozeCGMStart.value && (dateTimeUtils.getNowTimeIntervalUTC() - UserDefaultsRepository.alertSageInsertTime.value < 7200) {
             let snoozeTime = Date(timeIntervalSince1970: UserDefaultsRepository.alertSageInsertTime.value + 7200)
             UserDefaultsRepository.alertSnoozeAllTime.value = snoozeTime
             UserDefaultsRepository.alertSnoozeAllIsSnoozed.value = true
-            guard let alarms = self.tabBarController!.viewControllers?[1] as? AlarmViewController else { return }
+            guard let alarms = ViewControllerManager.shared.alarmViewController else { return }
             alarms.reloadIsSnoozed(key: "alertSnoozeAllIsSnoozed", value: true)
             alarms.reloadSnoozeTime(key: "alertSnoozeAllTime", setNil: false, value: snoozeTime)
         }
-        
+
         if let sageTime = formatter.date(from: (lastSageString as! String))?.timeIntervalSince1970 {
             let now = dateTimeUtils.getNowTimeIntervalUTC()
             let secondsAgo = now - sageTime
-            let days = 24 * 60 * 60
             
             let formatter = DateComponentsFormatter()
             formatter.unitsStyle = .positional // Use the appropriate positioning for the current locale
             formatter.allowedUnits = [ .day, .hour] // Units to display in the formatted string
             formatter.zeroFormattingBehavior = [ .pad ] // Pad with zeroes where appropriate for the locale
             
-            let formattedDuration = formatter.string(from: secondsAgo)
-            tableData[6].value = formattedDuration ?? ""
+            if let formattedDuration = formatter.string(from: secondsAgo) {
+                infoManager.updateInfoData(type: .sage, value: formattedDuration)
+            }
         }
-        infoTable.reloadData()
     }
 }

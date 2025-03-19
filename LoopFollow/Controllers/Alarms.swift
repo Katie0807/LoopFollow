@@ -5,30 +5,20 @@
 //  Created by Jon Fawcett on 6/16/20.
 //  Copyright © 2020 Jon Fawcett. All rights reserved.
 //
-//
-//
-//
-//
-//
-
 
 import Foundation
 import AVFoundation
 import CallKit
 
 extension MainViewController {
-    
-    
     func checkAlarms(bgs: [ShareGlucoseData]) {
-        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Checking Alarms") }
         // Don't check or fire alarms within 1 minute of prior alarm
         if checkAlarmTimer.isValid {  return }
         
         let date = Date()
         let now = date.timeIntervalSince1970
         let currentBG = bgs[bgs.count - 1].sgv
-        //let lastBG = bgs[bgs.count - 2].sgv // not used, protect index out of bounds
-        
+
         var skipZero = false
         if UserDefaultsRepository.alertIgnoreZero.value && currentBG == 0 {
             skipZero = true
@@ -58,7 +48,6 @@ extension MainViewController {
         
         
         let currentBGTime = bgs[bgs.count - 1].date
-        var alarmTriggered = false
         var numLoops = 0
         var playSound = true
         checkQuietHours()
@@ -86,7 +75,7 @@ extension MainViewController {
             }
             if bolusCount >= UserDefaultsRepository.alertIOBNumber.value ||
                 totalBoluses >= Double(UserDefaultsRepository.alertIOBMaxBoluses.value) ||
-                Double(latestIOB) ?? 0 >= Double(UserDefaultsRepository.alertIOBMaxBoluses.value) {
+                (latestIOB?.value ?? 0) >= Double(UserDefaultsRepository.alertIOBMaxBoluses.value) {
                 AlarmSound.whichAlarm = "IOB Alert"
                 //determine if it is day or night and what should happen
                 if UserDefaultsRepository.nightTime.value {
@@ -104,7 +93,7 @@ extension MainViewController {
         // Check COB
         if UserDefaultsRepository.alertCOB.value && !UserDefaultsRepository.alertCOBIsSnoozed.value {
             let alertAt = Double(UserDefaultsRepository.alertCOBAt.value)
-            if Double(latestCOB) ?? 0 >= alertAt {
+            if (latestCOB?.value ?? 0) >= alertAt {
                 AlarmSound.whichAlarm = "COB Alert"
                 //determine if it is day or night and what should happen
                 if UserDefaultsRepository.nightTime.value {
@@ -338,14 +327,13 @@ extension MainViewController {
         }
         
         //check for not looping alert
-        if UserDefaultsRepository.url.value != "" {
-            
+        if IsNightscoutEnabled() {
+            LogManager.shared.log(category: .alarm, message: "Checking NotLooping LastLoopTime was \(UserDefaultsRepository.alertLastLoopTime.value) that gives a diff of: \(Double(dateTimeUtils.getNowTimeIntervalUTC() - UserDefaultsRepository.alertLastLoopTime.value))", isDebug: true)
             if UserDefaultsRepository.alertNotLoopingActive.value
                 && !UserDefaultsRepository.alertNotLoopingIsSnoozed.value
                 && (Double(dateTimeUtils.getNowTimeIntervalUTC() - UserDefaultsRepository.alertLastLoopTime.value) >= Double(UserDefaultsRepository.alertNotLooping.value * 60))
                 && UserDefaultsRepository.alertLastLoopTime.value > 0 {
                 
-                var trigger = true
                 if (UserDefaultsRepository.alertNotLoopingUseLimits.value
                     && (
                         (Float(currentBG) >= UserDefaultsRepository.alertNotLoopingUpperLimit.value
@@ -364,6 +352,7 @@ extension MainViewController {
                         if !UserDefaultsRepository.alertNotLoopingDayTimeAudible.value { playSound = false }
                     }
                     triggerAlarm(sound: UserDefaultsRepository.alertNotLoopingSound.value, snooozedBGReadingTime: nil, overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value, numLoops: numLoops, snoozeTime: UserDefaultsRepository.alertNotLoopingSnooze.value, audio: playSound)
+                    LogManager.shared.log(category: .alarm, message: "!!!Not Looping!!!")
                     return
                 }
             }
@@ -403,7 +392,6 @@ extension MainViewController {
                     // Get the latest bolus over the small bolus exclusion
                     // Start with 0.0 bolus assuming there isn't one to cause a trigger and only add one if found
                     var lastBolus = 0.0
-                    var lastBolusTime = 0.0
                     var i = 1
                     // check the boluses in reverse order setting it only if the time is after the carb time minus prebolus time.
                     // This will make the loop stop at the most recent bolus that is over the minimum value or continue through all boluses
@@ -411,7 +399,6 @@ extension MainViewController {
                         // Set the bolus if it's after the carb time minus prebolus time
                         if (bolusData[bolusData.count - i].date >= lastCarbTime - Double(UserDefaultsRepository.alertMissedBolusPrebolus.value * 60)) {
                             lastBolus = bolusData[bolusData.count - i].value
-                            lastBolusTime = bolusData[bolusData.count - i].date
                         }
                         i += 1
                     }
@@ -509,16 +496,59 @@ extension MainViewController {
             }
         }
 
-        if UserDefaultsRepository.alertRecBolusActive.value && !UserDefaultsRepository.alertRecBolusIsSnoozed.value {
+        // Check for rapid battery drop
+        if UserDefaultsRepository.alertBatteryDropActive.value && !UserDefaultsRepository.alertBatteryDropIsSnoozed.value {
+            let targetDate = Calendar.current.date(byAdding: .minute, value: Int(-UserDefaultsRepository.alertBatteryDropPeriod.value), to: Date())!
+            let currentBatteryLevel = UserDefaultsRepository.deviceBatteryLevel.value as Double
+            let dropPercentage = Double(UserDefaultsRepository.alertBatteryDropPercentage.value)
+
+            // find the closest matching entry to the user defined timeframe
+            // this allows flexibility for ingress data matching as it can come at different intervals
+            if let previousBatteryLevel = deviceBatteryData.min(by: {
+                abs($0.timestamp.timeIntervalSince(targetDate)) < abs($1.timestamp.timeIntervalSince(targetDate))
+            }) {
+                // ignore a drop with a previous level of 100 as it will trigger a false alarm
+                if (previousBatteryLevel.batteryLevel < 100) {
+                    if (previousBatteryLevel.batteryLevel - currentBatteryLevel) >= dropPercentage {
+                        AlarmSound.whichAlarm = "Battery Drop"
+
+                        if UserDefaultsRepository.alertBatteryDropRepeat.value { numLoops = -1 }
+                        triggerAlarm(sound: UserDefaultsRepository.alertBatteryDropSound.value, snooozedBGReadingTime: nil, overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value, numLoops: numLoops, snoozeTime: UserDefaultsRepository.alertBatteryDropSnoozeHours.value, snoozeIncrement: 1, audio: true)
+                        return
+                    }
+                }
+            }
+        }
+
+        if UserDefaultsRepository.alertRecBolusActive.value,
+           !UserDefaultsRepository.alertRecBolusIsSnoozed.value
+        {
             let currentRecBolus = UserDefaultsRepository.deviceRecBolus.value
-            let alertAtRecBolus = Double(UserDefaultsRepository.alertRecBolusLevel.value)
+            let alertAtRecBolus = UserDefaultsRepository.alertRecBolusLevel.value
 
             if currentRecBolus >= alertAtRecBolus {
-                AlarmSound.whichAlarm = "Rec. Bolus"
+                if currentRecBolus > (Observable.shared.lastRecBolusTriggered.value ?? 0) {
+                    AlarmSound.whichAlarm = "Rec. Bolus"
 
-                if UserDefaultsRepository.alertRecBolusRepeat.value { numLoops = -1 }
-                triggerAlarm(sound: UserDefaultsRepository.alertRecBolusSound.value, snooozedBGReadingTime: nil, overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value, numLoops: numLoops, snoozeTime: UserDefaultsRepository.alertRecBolusSnooze.value, snoozeIncrement: 5, audio: true)
-                return
+                    if UserDefaultsRepository.alertRecBolusRepeat.value {
+                        numLoops = -1
+                    }
+
+                    triggerAlarm(
+                        sound: UserDefaultsRepository.alertRecBolusSound.value,
+                        snooozedBGReadingTime: nil,
+                        overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value,
+                        numLoops: numLoops,
+                        snoozeTime: UserDefaultsRepository.alertRecBolusSnooze.value,
+                        snoozeIncrement: 5,
+                        audio: true
+                    )
+
+                    Observable.shared.lastRecBolusTriggered.value = currentRecBolus
+                    return
+                }
+            } else {
+                Observable.shared.lastRecBolusTriggered.value = nil
             }
         }
 
@@ -579,14 +609,70 @@ extension MainViewController {
                 lastOverrideAlarm = now
         }
     }
-    
+
+    func checkTempTargetAlarms() {
+        if UserDefaultsRepository.alertSnoozeAllIsSnoozed.value { return }
+
+        let recentTempTarget = tempTargetGraphData.last
+        let recentStart: TimeInterval = recentTempTarget?.date ?? 0
+        let recentEnd: TimeInterval = recentTempTarget?.endDate ?? 0
+        let now = dateTimeUtils.getNowTimeIntervalUTC()
+
+        var triggerStart = false
+        var triggerEnd = false
+
+        // Trigger newly started temp target
+        if now - recentStart > 0 && now - recentStart <= (15 * 60) && recentStart > lastTempTargetAlarm {
+            triggerStart = true
+        } else if now - recentEnd > 0 && now - recentEnd <= (15 * 60) && recentEnd > lastTempTargetAlarm {
+            triggerEnd = true
+        } else {
+            return
+        }
+
+        var numLoops = 0
+        var playSound = true
+
+        // Check Temp Target Start Alarm
+        if UserDefaultsRepository.alertTempTargetStart.value && !UserDefaultsRepository.alertTempTargetStartIsSnoozed.value && triggerStart {
+            AlarmSound.whichAlarm = "Temp Target Started"
+            // Determine if it is day or night and what should happen
+            if UserDefaultsRepository.nightTime.value {
+                if UserDefaultsRepository.alertTempTargetStartNightTime.value { numLoops = -1 }
+                if !UserDefaultsRepository.alertTempTargetStartNightTimeAudible.value { playSound = false }
+            } else {
+                if UserDefaultsRepository.alertTempTargetStartDayTime.value { numLoops = -1 }
+                if !UserDefaultsRepository.alertTempTargetStartDayTimeAudible.value { playSound = false }
+            }
+            triggerOneTimeAlarm(sound: UserDefaultsRepository.alertTempTargetStartSound.value, overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value, numLoops: numLoops, audio: playSound)
+            lastTempTargetStartTime = recentStart
+            lastTempTargetAlarm = now
+        }
+
+        // Check Temp Target End Alarm
+        else if UserDefaultsRepository.alertTempTargetEnd.value && !UserDefaultsRepository.alertTempTargetEndIsSnoozed.value && triggerEnd {
+            AlarmSound.whichAlarm = "Temp Target Ended"
+            // Determine if it is day or night and what should happen
+            if UserDefaultsRepository.nightTime.value {
+                if UserDefaultsRepository.alertTempTargetEndNightTime.value { numLoops = -1 }
+                if !UserDefaultsRepository.alertTempTargetEndNightTimeAudible.value { playSound = false }
+            } else {
+                if UserDefaultsRepository.alertTempTargetEndDayTime.value { numLoops = -1 }
+                if !UserDefaultsRepository.alertTempTargetEndDayTimeAudible.value { playSound = false }
+            }
+            triggerOneTimeAlarm(sound: UserDefaultsRepository.alertTempTargetEndSound.value, overrideVolume: UserDefaultsRepository.overrideSystemOutputVolume.value, numLoops: numLoops, audio: playSound)
+            lastTempTargetEndTime = recentEnd
+            lastTempTargetAlarm = now
+        }
+    }
+
     func triggerOneTimeAlarm(sound: String, overrideVolume: Bool, numLoops: Int, audio: Bool = true)
     {
         var audioDuringCall = true
         if !UserDefaultsRepository.alertAudioDuringPhone.value && isOnPhoneCall() { audioDuringCall = false }
         
         guard let snoozer = self.tabBarController!.viewControllers?[2] as? SnoozeViewController else { return }
-        snoozer.updateDisplayWhenTriggered(bgVal: bgUnits.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: bgUnits.toDisplayUnits(latestDeltaString) ?? "", minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
+        snoozer.updateDisplayWhenTriggered(bgVal: Localizer.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: latestDeltaString, minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
         if audio && !UserDefaultsRepository.alertMuteAllIsMuted.value && audioDuringCall{
             AlarmSound.setSoundFile(str: sound)
             AlarmSound.play(overrideVolume: overrideVolume, numLoops: numLoops)
@@ -596,11 +682,13 @@ extension MainViewController {
     
     func triggerAlarm(sound: String, snooozedBGReadingTime: TimeInterval?, overrideVolume: Bool, numLoops: Int, snoozeTime: Int = 0, snoozeIncrement: Int = 5, audio: Bool = true)
     {
+        LogManager.shared.log(category: .alarm, message: "Alarm triggered: \(AlarmSound.whichAlarm)")
+
         var audioDuringCall = true
         if !UserDefaultsRepository.alertAudioDuringPhone.value && isOnPhoneCall() { audioDuringCall = false }
         
         guard let snoozer = self.tabBarController!.viewControllers?[2] as? SnoozeViewController else { return }
-        snoozer.updateDisplayWhenTriggered(bgVal: bgUnits.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: bgUnits.toDisplayUnits(latestDeltaString) ?? "", minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
+        snoozer.updateDisplayWhenTriggered(bgVal: Localizer.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: latestDeltaString, minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
         snoozer.SnoozeButton.isHidden = false
         snoozer.AlertLabel.isHidden = false
         snoozer.clockLabel.isHidden = true
@@ -633,7 +721,7 @@ extension MainViewController {
         
         AlarmSound.whichAlarm = "none"
         guard let snoozer = self.tabBarController!.viewControllers?[2] as? SnoozeViewController else { return }
-        snoozer.updateDisplayWhenTriggered(bgVal: bgUnits.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: bgUnits.toDisplayUnits(latestDeltaString) ?? "", minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
+        snoozer.updateDisplayWhenTriggered(bgVal: Localizer.toDisplayUnits(String(bgData[bgData.count - 1].sgv)), directionVal: latestDirectionString ?? "", deltaVal: latestDeltaString, minAgoVal: latestMinAgoString ?? "", alertLabelVal: AlarmSound.whichAlarm)
         snoozer.SnoozeButton.isHidden = true
         snoozer.AlertLabel.isHidden = true
         if AlarmSound.isPlaying {
@@ -642,105 +730,101 @@ extension MainViewController {
     }
     
     func clearOldSnoozes(){
-          let date = Date()
-          let now = date.timeIntervalSince1970
-          var needsReload: Bool = false
-          guard let alarms = self.tabBarController!.viewControllers?[1] as? AlarmViewController else { return }
-          
-          if date > UserDefaultsRepository.alertSnoozeAllTime.value ?? date {
-              UserDefaultsRepository.alertSnoozeAllTime.setNil(key: "alertSnoozeAllTime")
-              UserDefaultsRepository.alertSnoozeAllIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertSnoozeAllTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertSnoozeAllIsSnoozed", value: false)
-            
-          }
-          
+        let date = Date()
+        guard let alarms = ViewControllerManager.shared.alarmViewController else { return }
+
+        if date > UserDefaultsRepository.alertSnoozeAllTime.value ?? date {
+            UserDefaultsRepository.alertSnoozeAllTime.setNil(key: "alertSnoozeAllTime")
+            UserDefaultsRepository.alertSnoozeAllIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertSnoozeAllTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertSnoozeAllIsSnoozed", value: false)
+        }
+
         if date > UserDefaultsRepository.alertMuteAllTime.value ?? date {
             UserDefaultsRepository.alertMuteAllTime.setNil(key: "alertMuteAllTime")
             UserDefaultsRepository.alertMuteAllIsMuted.value = false
             alarms.reloadMuteTime(key: "alertMuteAllTime", setNil: true)
             alarms.reloadIsMuted(key: "alertMuteAllIsMuted", value: false)
-          
         }
-        
-          if date > UserDefaultsRepository.alertUrgentLowSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertUrgentLowSnoozedTime.setNil(key: "alertUrgentLowSnoozedTime")
-              UserDefaultsRepository.alertUrgentLowIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertUrgentLowSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertUrgentLowIsSnoozed", value: false)
-            
-          }
-          if date > UserDefaultsRepository.alertLowSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertLowSnoozedTime.setNil(key: "alertLowSnoozedTime")
-              UserDefaultsRepository.alertLowIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertLowSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertLowIsSnoozed", value: false)
-         
-          }
-          if date > UserDefaultsRepository.alertHighSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertHighSnoozedTime.setNil(key: "alertHighSnoozedTime")
-              UserDefaultsRepository.alertHighIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertHighSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertHighIsSnoozed", value: false)
-            
-          }
-          if date > UserDefaultsRepository.alertUrgentHighSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertUrgentHighSnoozedTime.setNil(key: "alertUrgentHighSnoozedTime")
-              UserDefaultsRepository.alertUrgentHighIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertUrgentHighSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertUrgentHighIsSnoozed", value: false)
-            
-          }
-          if date > UserDefaultsRepository.alertFastDropSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertFastDropSnoozedTime.setNil(key: "alertFastDropSnoozedTime")
-              UserDefaultsRepository.alertFastDropIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertFastDropSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertFastDropIsSnoozed", value: false)
-             
-          }
-          if date > UserDefaultsRepository.alertFastRiseSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertFastRiseSnoozedTime.setNil(key: "alertFastRiseSnoozedTime")
-              UserDefaultsRepository.alertFastRiseIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertFastRiseSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertFastRiseIsSnoozed", value: false)
-             
-          }
-          if date > UserDefaultsRepository.alertMissedReadingSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertMissedReadingSnoozedTime.setNil(key: "alertMissedReadingSnoozedTime")
-              UserDefaultsRepository.alertMissedReadingIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertMissedReadingSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertMissedReadingIsSnoozed", value: false)
-            
-          }
-          if date > UserDefaultsRepository.alertNotLoopingSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertNotLoopingSnoozedTime.setNil(key: "alertNotLoopingSnoozedTime")
-              UserDefaultsRepository.alertNotLoopingIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertNotLoopingSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertNotLoopingIsSnoozed", value: false)
-           
-              
-          }
-          if date > UserDefaultsRepository.alertMissedBolusSnoozedTime.value ?? date {
-              UserDefaultsRepository.alertMissedBolusSnoozedTime.setNil(key: "alertMissedBolusSnoozedTime")
-              UserDefaultsRepository.alertMissedBolusIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertMissedBolusSnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertMissedBolusIsSnoozed", value: false)
 
-          }
-          if date > UserDefaultsRepository.alertSAGESnoozedTime.value ?? date {
-              UserDefaultsRepository.alertSAGESnoozedTime.setNil(key: "alertSAGESnoozedTime")
-              UserDefaultsRepository.alertSAGEIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertSAGESnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertSAGEIsSnoozed", value: false)
-    
-          }
-          if date > UserDefaultsRepository.alertCAGESnoozedTime.value ?? date {
-              UserDefaultsRepository.alertCAGESnoozedTime.setNil(key: "alertCAGESnoozedTime")
-              UserDefaultsRepository.alertCAGEIsSnoozed.value = false
-              alarms.reloadSnoozeTime(key: "alertCAGESnoozedTime", setNil: true)
-              alarms.reloadIsSnoozed(key: "alertCAGEIsSnoozed", value: false)
+        if date > UserDefaultsRepository.alertUrgentLowSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertUrgentLowSnoozedTime.setNil(key: "alertUrgentLowSnoozedTime")
+            UserDefaultsRepository.alertUrgentLowIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertUrgentLowSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertUrgentLowIsSnoozed", value: false)
 
-          }
+        }
+        if date > UserDefaultsRepository.alertLowSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertLowSnoozedTime.setNil(key: "alertLowSnoozedTime")
+            UserDefaultsRepository.alertLowIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertLowSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertLowIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertHighSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertHighSnoozedTime.setNil(key: "alertHighSnoozedTime")
+            UserDefaultsRepository.alertHighIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertHighSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertHighIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertUrgentHighSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertUrgentHighSnoozedTime.setNil(key: "alertUrgentHighSnoozedTime")
+            UserDefaultsRepository.alertUrgentHighIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertUrgentHighSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertUrgentHighIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertFastDropSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertFastDropSnoozedTime.setNil(key: "alertFastDropSnoozedTime")
+            UserDefaultsRepository.alertFastDropIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertFastDropSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertFastDropIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertFastRiseSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertFastRiseSnoozedTime.setNil(key: "alertFastRiseSnoozedTime")
+            UserDefaultsRepository.alertFastRiseIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertFastRiseSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertFastRiseIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertMissedReadingSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertMissedReadingSnoozedTime.setNil(key: "alertMissedReadingSnoozedTime")
+            UserDefaultsRepository.alertMissedReadingIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertMissedReadingSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertMissedReadingIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertNotLoopingSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertNotLoopingSnoozedTime.setNil(key: "alertNotLoopingSnoozedTime")
+            UserDefaultsRepository.alertNotLoopingIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertNotLoopingSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertNotLoopingIsSnoozed", value: false)
+
+
+        }
+        if date > UserDefaultsRepository.alertMissedBolusSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertMissedBolusSnoozedTime.setNil(key: "alertMissedBolusSnoozedTime")
+            UserDefaultsRepository.alertMissedBolusIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertMissedBolusSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertMissedBolusIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertSAGESnoozedTime.value ?? date {
+            UserDefaultsRepository.alertSAGESnoozedTime.setNil(key: "alertSAGESnoozedTime")
+            UserDefaultsRepository.alertSAGEIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertSAGESnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertSAGEIsSnoozed", value: false)
+
+        }
+        if date > UserDefaultsRepository.alertCAGESnoozedTime.value ?? date {
+            UserDefaultsRepository.alertCAGESnoozedTime.setNil(key: "alertCAGESnoozedTime")
+            UserDefaultsRepository.alertCAGEIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertCAGESnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertCAGEIsSnoozed", value: false)
+
+        }
         if date > UserDefaultsRepository.alertOverrideStartSnoozedTime.value ?? date {
             UserDefaultsRepository.alertOverrideStartSnoozedTime.setNil(key: "alertOverrideStartSnoozedTime")
             UserDefaultsRepository.alertOverrideStartIsSnoozed.value = false
@@ -754,7 +838,7 @@ extension MainViewController {
             alarms.reloadIsSnoozed(key: "alertOverrideEndIsSnoozed", value: false)
 
         }
-        
+
         if date > UserDefaultsRepository.alertPumpSnoozedTime.value ?? date {
             UserDefaultsRepository.alertPumpSnoozedTime.setNil(key: "alertPumpSnoozedTime")
             UserDefaultsRepository.alertPumpIsSnoozed.value = false
@@ -762,7 +846,7 @@ extension MainViewController {
             alarms.reloadIsSnoozed(key: "alertPumpIsSnoozed", value: false)
 
         }
-        
+
         if date > UserDefaultsRepository.alertIOBSnoozedTime.value ?? date {
             UserDefaultsRepository.alertIOBSnoozedTime.setNil(key: "alertIOBSnoozedTime")
             UserDefaultsRepository.alertIOBIsSnoozed.value = false
@@ -770,7 +854,7 @@ extension MainViewController {
             alarms.reloadIsSnoozed(key: "alertIOBIsSnoozed", value: false)
 
         }
-        
+
         if date > UserDefaultsRepository.alertCOBSnoozedTime.value ?? date {
             UserDefaultsRepository.alertCOBSnoozedTime.setNil(key: "alertCOBSnoozedTime")
             UserDefaultsRepository.alertCOBIsSnoozed.value = false
@@ -778,12 +862,19 @@ extension MainViewController {
             alarms.reloadIsSnoozed(key: "alertCOBIsSnoozed", value: false)
 
         }
-        
+
         if date > UserDefaultsRepository.alertBatterySnoozedTime.value ?? date {
             UserDefaultsRepository.alertBatterySnoozedTime.setNil(key: "alertBatterySnoozedTime")
             UserDefaultsRepository.alertBatteryIsSnoozed.value = false
             alarms.reloadSnoozeTime(key: "alertBatterySnoozedTime", setNil: true)
             alarms.reloadIsSnoozed(key: "alertBatteryIsSnoozed", value: false)
+        }
+
+        if date > UserDefaultsRepository.alertBatteryDropSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertBatteryDropSnoozedTime.setNil(key: "alertBatteryDropSnoozedTime")
+            UserDefaultsRepository.alertBatteryDropIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertBatteryDropSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertBatteryDropIsSnoozed", value: false)
         }
 
         if date > UserDefaultsRepository.alertRecBolusSnoozedTime.value ?? date {
@@ -792,18 +883,25 @@ extension MainViewController {
             alarms.reloadSnoozeTime(key: "alertRecBolusSnoozedTime", setNil: true)
             alarms.reloadIsSnoozed(key: "alertRecBolusIsSnoozed", value: false)
         }
+        if date > UserDefaultsRepository.alertTempTargetStartSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertTempTargetStartSnoozedTime.setNil(key: "alertTempTargetStartSnoozedTime")
+            UserDefaultsRepository.alertTempTargetStartIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertTempTargetStartSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertTempTargetStartIsSnoozed", value: false)
+        }
+        if date > UserDefaultsRepository.alertTempTargetEndSnoozedTime.value ?? date {
+            UserDefaultsRepository.alertTempTargetEndSnoozedTime.setNil(key: "alertTempTargetEndSnoozedTime")
+            UserDefaultsRepository.alertTempTargetEndIsSnoozed.value = false
+            alarms.reloadSnoozeTime(key: "alertTempTargetEndSnoozedTime", setNil: true)
+            alarms.reloadIsSnoozed(key: "alertTempTargetEndIsSnoozed", value: false)
+        }
     }
-    
+
     func checkQuietHours() {
         if UserDefaultsRepository.quietHourStart.value == nil || UserDefaultsRepository.quietHourEnd.value == nil { return }
         
-        var startDateComponents = DateComponents()
-        
         let today = Date()
         let todayCalendar = Calendar.current
-        let month = todayCalendar.component(.month, from: today)
-        let day = todayCalendar.component(.day, from: today)
-        let year = todayCalendar.component(.year, from: today)
         let hour = todayCalendar.component(.hour, from: today)
         let minute = todayCalendar.component(.minute, from: today)
         let todayMinutes = (60 * hour) + minute
@@ -897,7 +995,8 @@ extension MainViewController {
         // Speak always
         if always {
             speakBG(currentValue: currentValue, previousValue: previousValue)
-            print("Speaking because 'Always' is enabled.")
+            LogManager.shared.log(category: .general, message: "Speaking because 'Always' is enabled.", isDebug: true)
+
             return
         }
         
@@ -905,7 +1004,7 @@ extension MainViewController {
         if speakLowBG {
             if currentValue <= Int(lowThreshold) || previousValue <= Int(lowThreshold) {
                 speakBG(currentValue: currentValue, previousValue: previousValue)
-                print("Speaking because of 'Low' condition.")
+                LogManager.shared.log(category: .general, message: "Speaking because of 'Low' condition.", isDebug: true)
                 return
             }
         }
@@ -921,7 +1020,7 @@ extension MainViewController {
                 currentValue <= Int(lowThreshold) || previousValue <= Int(lowThreshold) ||
                 ((currentValue <= Int(highThreshold) && (previousValue - currentValue) >= Int(fastDropDelta))) {
                 speakBG(currentValue: currentValue, previousValue: previousValue)
-                print("Speaking because of 'Proactive Low' condition. Predictive trigger: \(predictiveTrigger)")
+                LogManager.shared.log(category: .general, message: "Speaking because of 'Proactive Low' condition. Predictive trigger: \(predictiveTrigger)", isDebug: true)
                 return
             }
         }
@@ -930,12 +1029,12 @@ extension MainViewController {
         if speakHighBG {
             if currentValue >= Int(highThreshold) || previousValue >= Int(highThreshold) {
                 speakBG(currentValue: currentValue, previousValue: previousValue)
-                print("Speaking because of 'High' condition.")
+                LogManager.shared.log(category: .general, message: "Speaking because of 'High' condition.", isDebug: true)
                 return
             }
         }
-        
-        print("No condition met for speaking.")
+
+        LogManager.shared.log(category: .general, message: "No condition met for speaking.", isDebug: true)
     }
     
     struct AnnouncementTexts {
@@ -1001,7 +1100,7 @@ extension MainViewController {
             try audioSession.setCategory(.playback, mode: .default)
             try audioSession.setActive(true)
         } catch {
-            print("Failed to set up audio session: \(error)")
+            LogManager.shared.log(category: .alarm, message: "speakBG, Failed to set up audio session: \(error)")
         }
         
         // Get the current time
@@ -1011,7 +1110,7 @@ extension MainViewController {
         // If `lastSpeechTime` is `nil` (i.e., this is the first time `speakBG` is being called), use `Date.distantPast` as the default
         // value to ensure that the `guard` statement passes and the announcement is made.
         guard currentTime.timeIntervalSince(lastSpeechTime ?? .distantPast) >= 30 else {
-            print("Repeated calls to speakBG detected!")
+            LogManager.shared.log(category: .general, message: "Repeated calls to speakBG detected!", isDebug: true)
             return
         }
 
@@ -1026,14 +1125,14 @@ extension MainViewController {
         let texts = AnnouncementTexts.forLanguage(preferredLanguage)
         
         let negligibleThreshold = 3
-        let localizedCurrentValue = bgUnits.toDisplayUnits(String(currentValue)).replacingOccurrences(of: ",", with: ".")
+        let localizedCurrentValue = Localizer.toDisplayUnits(String(currentValue)).replacingOccurrences(of: ",", with: ".")
         let announcementText: String
         
         if abs(bloodGlucoseDifference) <= negligibleThreshold {
             announcementText = "\(texts.currentBGIs) \(localizedCurrentValue) \(texts.stable)"
         } else {
             let directionText = bloodGlucoseDifference < 0 ? texts.decrease : texts.increase
-            let absoluteDifference = bgUnits.toDisplayUnits(String(abs(bloodGlucoseDifference))).replacingOccurrences(of: ",", with: ".")
+            let absoluteDifference = Localizer.toDisplayUnits(String(abs(bloodGlucoseDifference))).replacingOccurrences(of: ",", with: ".")
             announcementText = "\(texts.currentBGIs) \(localizedCurrentValue) \(directionText) \(absoluteDifference)"
         }
         

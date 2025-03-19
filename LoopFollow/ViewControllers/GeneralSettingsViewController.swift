@@ -48,14 +48,6 @@ class GeneralSettingsViewController: FormViewController {
            }
            
         }
-        <<< SwitchRow("backgroundRefresh"){ row in
-            row.title = "Background Refresh"
-            row.tag = "backgroundRefresh"
-            row.value = UserDefaultsRepository.backgroundRefresh.value
-        }.onChange { [weak self] row in
-                    guard let value = row.value else { return }
-                    UserDefaultsRepository.backgroundRefresh.value = value
-            }
         <<< SwitchRow("persistentNotification") { row in
         row.title = "Persistent Notification"
         row.value = UserDefaultsRepository.persistentNotification.value
@@ -220,7 +212,7 @@ class GeneralSettingsViewController: FormViewController {
            row.value = Double(UserDefaultsRepository.speakLowBGLimit.value)
            row.displayValueFor = { value in
                guard let value = value else { return nil }
-               return bgUnits.toDisplayUnits(String(value))
+               return Localizer.toDisplayUnits(String(value))
            }
            // Visibility depends on either 'speakLowBG' or 'speakProactiveLowBG' being true
            row.hidden = Condition.function(["speakLowBG", "speakProactiveLowBG", "speakBG", "speakBGAlways"], { form in
@@ -243,7 +235,7 @@ class GeneralSettingsViewController: FormViewController {
            row.value = Double(UserDefaultsRepository.speakFastDropDelta.value)
            row.displayValueFor = { value in
                guard let value = value else { return nil }
-               return bgUnits.toDisplayUnits(String(value))
+               return Localizer.toDisplayUnits(String(value))
            }
            // Visibility depends on 'speakProactiveLowBG' being true
            row.hidden = Condition.function(["speakProactiveLowBG", "speakBG", "speakBGAlways"], { form in
@@ -273,7 +265,7 @@ class GeneralSettingsViewController: FormViewController {
            row.value = Double(UserDefaultsRepository.speakHighBGLimit.value)
            row.displayValueFor = { value in
                guard let value = value else { return nil }
-               return bgUnits.toDisplayUnits(String(value))
+               return Localizer.toDisplayUnits(String(value))
            }
            // Visibility depends on 'speakHighBG' or 'speakProactiveLowBG' being true
            row.hidden = Condition.function(["speakHighBG", "speakProactiveLowBG", "speakBG", "speakBGAlways"], { form in

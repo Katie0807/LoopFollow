@@ -9,39 +9,70 @@
 import Foundation
 import UIKit
 import Charts
+import HealthKit
 
 extension MainViewController {
     func DeviceStatusLoop(formatter: ISO8601DateFormatter, lastLoopRecord: [String: AnyObject]) {
-        
+        ObservableUserDefaults.shared.device.value = "Loop"
+
+        if Storage.shared.remoteType.value == .trc {
+            Storage.shared.remoteType.value = .none
+        }
+
         if let lastLoopTime = formatter.date(from: (lastLoopRecord["timestamp"] as! String))?.timeIntervalSince1970  {
+            let previousLastLoopTime = UserDefaultsRepository.alertLastLoopTime.value
             UserDefaultsRepository.alertLastLoopTime.value = lastLoopTime
-            if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "lastLoopTime: " + String(lastLoopTime)) }
             if let failure = lastLoopRecord["failureReason"] {
                 LoopStatusLabel.text = "X"
                 latestLoopStatusString = "X"
-                if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Loop Failure: X") }
             } else {
                 var wasEnacted = false
                 if let enacted = lastLoopRecord["enacted"] as? [String:AnyObject] {
-                    if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Loop: Was Enacted") }
                     wasEnacted = true
                     if let lastTempBasal = enacted["rate"] as? Double {
                         
                     }
                 }
-                if let iobdata = lastLoopRecord["iob"] as? [String:AnyObject] {
-                    tableData[0].value = String(format:"%.2f", (iobdata["iob"] as! Double))
-                    latestIOB = String(format:"%.2f", (iobdata["iob"] as! Double))
+
+                // ISF
+                let profileISF = profileManager.currentISF()
+                if let profileISF = profileISF {
+                    infoManager.updateInfoData(type: .isf, value: profileISF)
                 }
-                if let cobdata = lastLoopRecord["cob"] as? [String:AnyObject] {
-                    tableData[1].value = String(format:"%.0f", cobdata["cob"] as! Double)
-                    latestCOB = String(format:"%.0f", cobdata["cob"] as! Double)
+
+                // Carb Ratio (CR)
+                let profileCR = profileManager.currentCarbRatio()
+                if let profileCR = profileCR {
+                    infoManager.updateInfoData(type: .carbRatio, value: profileCR)
                 }
+
+                // Target
+                let profileTargetLow = profileManager.currentTargetLow()
+                let profileTargetHigh = profileManager.currentTargetHigh()
+
+                if let profileTargetLow = profileTargetLow, let profileTargetHigh = profileTargetHigh, profileTargetLow != profileTargetHigh {
+                    infoManager.updateInfoData(type: .target, firstValue: profileTargetLow, secondValue: profileTargetHigh, separator: .dash)
+                } else if let profileTargetLow = profileTargetLow {
+                    infoManager.updateInfoData(type: .target, value: profileTargetLow)
+                }
+
+                // IOB
+                if let insulinMetric = InsulinMetric(from: lastLoopRecord["iob"], key: "iob") {
+                    infoManager.updateInfoData(type: .iob, value: insulinMetric)
+                    latestIOB = insulinMetric
+                }
+
+                // COB
+                if let cobMetric = CarbMetric(from: lastLoopRecord["cob"], key: "cob") {
+                    infoManager.updateInfoData(type: .cob, value: cobMetric)
+                    latestCOB = cobMetric
+                }
+
                 if let predictdata = lastLoopRecord["predicted"] as? [String:AnyObject] {
                     let prediction = predictdata["values"] as! [Double]
-                    PredictionLabel.text = bgUnits.toDisplayUnits(String(Int(prediction.last!)))
+                    PredictionLabel.text = Localizer.toDisplayUnits(String(Int(prediction.last!)))
                     PredictionLabel.textColor = UIColor.systemPurple
-                    if UserDefaultsRepository.downloadPrediction.value && latestLoopTime < lastLoopTime {
+                    if UserDefaultsRepository.downloadPrediction.value && previousLastLoopTime < lastLoopTime {
                         predictionData.removeAll()
                         var predictionTime = lastLoopTime
                         let toLoad = Int(UserDefaultsRepository.predictionToLoad.value * 12)
@@ -59,19 +90,23 @@ extension MainViewController {
                             i += 1
                         }
                         
-                        let predMin = prediction.min()
-                        let predMax = prediction.max()
-                        tableData[9].value = bgUnits.toDisplayUnits(String(predMin!)) + "/" + bgUnits.toDisplayUnits(String(predMax!))
-                        
+                        if let predMin = prediction.min(), let predMax = prediction.max() {
+                            let formattedMin = Localizer.toDisplayUnits(String(predMin))
+                            let formattedMax = Localizer.toDisplayUnits(String(predMax))
+                            let value = "\(formattedMin)/\(formattedMax)"
+                            infoManager.updateInfoData(type: .minMax, value: value)
+                        }
+
                         updatePredictionGraph()
                     }
                 } else {
                     predictionData.removeAll()
-                    tableData[9].value = ""
+                    infoManager.clearInfoData(type: .minMax)
                     updatePredictionGraph()
                 }
                 if let recBolus = lastLoopRecord["recommendedBolus"] as? Double {
-                    tableData[8].value = String(format:"%.2fU", recBolus)
+                    let formattedRecBolus = String(format: "%.2fU", recBolus)
+                    infoManager.updateInfoData(type: .recBolus, value: formattedRecBolus)
                     UserDefaultsRepository.deviceRecBolus.value = recBolus
                 }
                 if let loopStatus = lastLoopRecord["recommendedTempBasal"] as? [String:AnyObject] {
@@ -80,28 +115,20 @@ extension MainViewController {
                         if bgData.count > 0 {
                             lastBGTime = bgData[bgData.count - 1].date
                         }
-                        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "tempBasalTime: " + String(tempBasalTime)) }
-                        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "lastBGTime: " + String(lastBGTime)) }
-                        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "wasEnacted: " + String(wasEnacted)) }
                         if tempBasalTime > lastBGTime && !wasEnacted {
                             LoopStatusLabel.text = "⏀"
                             latestLoopStatusString = "⏀"
-                            if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Open Loop: recommended temp. temp time > bg time, was not enacted") }
                         } else {
                             LoopStatusLabel.text = "↻"
                             latestLoopStatusString = "↻"
-                            if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Looping: recommended temp, but temp time is < bg time and/or was enacted") }
                         }
                     }
                 } else {
                     LoopStatusLabel.text = "↻"
                     latestLoopStatusString = "↻"
-                    if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Looping: no recommended temp") }
                 }
                 
             }
-            
-            evaluateNotLooping(lastLoopTime: lastLoopTime)
         }
     }
 }

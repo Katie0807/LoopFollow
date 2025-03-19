@@ -15,22 +15,19 @@ extension MainViewController {
             case .success(let profileData):
                 self.updateProfile(profileData: profileData)
             case .failure(let error):
-                print("Error fetching profile data: \(error.localizedDescription)")
+                LogManager.shared.log(category: .nightscout, message: "webLoadNSProfile, error fetching profile data: \(error.localizedDescription)")
             }
         }
     }
     
     // NS Profile Response Processor
     func updateProfile(profileData: NSProfile) {
-        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Process: profile") }
-        
         guard let store = profileData.store["default"] ?? profileData.store["Default"] else {
             return
         }
-                
-        tableData[12].value = profileData.defaultProfile
-        infoTable.reloadData()
-
+        profileManager.loadProfile(from: profileData)
+        infoManager.updateInfoData(type: .profile, value: profileData.defaultProfile)
+        
         basalProfile.removeAll()
         for basalEntry in store.basal {
             let entry = basalProfileStruct(value: basalEntry.value, time: basalEntry.time, timeAsSeconds: basalEntry.timeAsSeconds)

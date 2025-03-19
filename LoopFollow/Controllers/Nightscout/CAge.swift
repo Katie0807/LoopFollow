@@ -23,15 +23,14 @@ extension MainViewController {
             case .success(let data):
                 self.updateCage(data: data)
             case .failure(let error):
-                print("Error: \(error.localizedDescription)")
+                LogManager.shared.log(category: .nightscout, message: "webLoadNSCage, error: \(error.localizedDescription)")
             }
         }
     }
     
     // NS Cage Response Processor
     func updateCage(data: [cageData]) {
-        self.clearLastInfoData(index: 7)
-        if UserDefaultsRepository.debugLog.value { self.writeDebugLog(value: "Process: CAGE") }
+        infoManager.clearInfoData(type: .cage)
         if data.count == 0 {
             return
         }
@@ -55,9 +54,9 @@ extension MainViewController {
             formatter.allowedUnits = [ .day, .hour ] // Units to display in the formatted string
             formatter.zeroFormattingBehavior = [ .pad ] // Pad with zeroes where appropriate for the locale
             
-            let formattedDuration = formatter.string(from: secondsAgo)
-            tableData[7].value = formattedDuration ?? ""
+            if let formattedDuration = formatter.string(from: secondsAgo) {
+                infoManager.updateInfoData(type: .cage, value: formattedDuration)
+            }
         }
-        infoTable.reloadData()
     }
 }
