@@ -1,11 +1,10 @@
-//
-//  BLEManager.swift
-//  LoopFollow
-//
+// LoopFollow
+// BLEManager.swift
+// Created by Jonas Björkert.
 
-import Foundation
-import CoreBluetooth
 import Combine
+import CoreBluetooth
+import Foundation
 
 class BLEManager: NSObject, ObservableObject {
     static let shared = BLEManager()
@@ -15,7 +14,7 @@ class BLEManager: NSObject, ObservableObject {
     private var centralManager: CBCentralManager!
     private var activeDevice: BluetoothDevice?
 
-    private override init() {
+    override private init() {
         super.init()
 
         centralManager = CBCentralManager(
@@ -73,6 +72,9 @@ class BLEManager: NSObject, ObservableObject {
             case .rileyLink:
                 activeDevice = RileyLinkHeartbeatBluetoothDevice(address: device.id.uuidString, name: device.name, bluetoothDeviceDelegate: self)
                 activeDevice?.connect()
+            case .omnipodDash:
+                activeDevice = OmnipodDashHeartbeatBluetoothTransmitter(address: device.id.uuidString, name: device.name, bluetoothDeviceDelegate: self)
+                activeDevice?.connect()
             case .silentTune, .none:
                 return
             }
@@ -94,6 +96,7 @@ class BLEManager: NSObject, ObservableObject {
     }
 
     private func addOrUpdateDevice(_ device: BLEDevice) {
+        LogManager.shared.log(category: .bluetooth, message: "Adding or updating BLE device: \(device)", isDebug: true)
         if let idx = devices.firstIndex(where: { $0.id == device.id }) {
             var updatedDevice = devices[idx]
             updatedDevice.rssi = device.rssi
@@ -120,6 +123,7 @@ class BLEManager: NSObject, ObservableObject {
 }
 
 // MARK: - CBCentralManagerDelegate
+
 extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
@@ -130,10 +134,11 @@ extension BLEManager: CBCentralManagerDelegate {
         }
     }
 
-    func centralManager(_ central: CBCentralManager,
+    func centralManager(_: CBCentralManager,
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any],
-                        rssi RSSI: NSNumber) {
+                        rssi RSSI: NSNumber)
+    {
         let uuid = peripheral.identifier
         let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
             .map { $0.uuidString }
@@ -194,7 +199,7 @@ extension BLEManager: BluetoothDeviceDelegate {
             return
         }
 
-        let marginPercentage: Double = 0.15 // 15% margin
+        let marginPercentage = 0.15 // 15% margin
         let margin = expectedInterval * marginPercentage
         let threshold = expectedInterval + margin
 
@@ -243,9 +248,15 @@ extension BLEManager {
             return nil
         }
 
-        let pollingDelay: TimeInterval = Double(UserDefaultsRepository.bgUpdateDelay.value)
+        let pollingDelay: TimeInterval = Double(Storage.shared.bgUpdateDelay.value)
 
         let expectedOffset = sensorOffset + pollingDelay
+
+        // If the heartbeat interval isn't a typical 60 or 300 seconds,
+        // we simply return a string indicating that the delay is "up to" the heartbeat interval.
+        if heartBeatInterval != 60, heartBeatInterval != 300 {
+            return "up to \(Int(heartBeatInterval)) sec"
+        }
 
         let effectiveDelay = CycleHelper.computeDelay(sensorOffset: expectedOffset, heartbeatLast: heartbeatLast, heartbeatInterval: heartBeatInterval)
 

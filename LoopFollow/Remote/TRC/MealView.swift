@@ -1,14 +1,10 @@
-//
-//  MealView.swift
-//  LoopFollow
-//
-//  Created by Jonas Björkert on 2024-08-25.
-//  Copyright © 2024 Jon Fawcett. All rights reserved.
-//
+// LoopFollow
+// MealView.swift
+// Created by Jonas Björkert.
 
-import SwiftUI
 import HealthKit
 import LocalAuthentication
+import SwiftUI
 
 struct MealView: View {
     @Environment(\.presentationMode) private var presentationMode
@@ -138,8 +134,9 @@ struct MealView: View {
 
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 guard carbs.doubleValue(for: .gram()) != 0 ||
-                                        protein.doubleValue(for: .gram()) != 0 ||
-                                        fat.doubleValue(for: .gram()) != 0 else {
+                                    protein.doubleValue(for: .gram()) != 0 ||
+                                    fat.doubleValue(for: .gram()) != 0
+                                else {
                                     return
                                 }
                                 if !showAlert {
@@ -211,7 +208,6 @@ struct MealView: View {
                         }),
                         secondaryButton: .cancel()
                     )
-
                 case .statusSuccess:
                     return Alert(
                         title: Text("Status"),
@@ -269,6 +265,12 @@ struct MealView: View {
                 isLoading = false
                 if success {
                     statusMessage = "Meal command sent successfully."
+                    LogManager.shared.log(
+                        category: .apns,
+                        message: "sendMealPushNotification succeeded - Carbs: \(carbs.doubleValue(for: .gram())) g, Protein: \(protein.doubleValue(for: .gram())) g, Fat: \(fat.doubleValue(for: .gram())) g, Bolus: \(bolusAmount.doubleValue(for: .internationalUnit())) U, Scheduled: \(scheduledDate != nil ? formatDate(scheduledDate!) : "now")"
+                    )
+
+                    // Reset meal values and scheduled data after success
                     carbs = HKQuantity(unit: .gram(), doubleValue: 0.0)
                     protein = HKQuantity(unit: .gram(), doubleValue: 0.0)
                     fat = HKQuantity(unit: .gram(), doubleValue: 0.0)
@@ -277,6 +279,10 @@ struct MealView: View {
                     alertType = .statusSuccess
                 } else {
                     statusMessage = errorMessage ?? "Failed to send meal command."
+                    LogManager.shared.log(
+                        category: .apns,
+                        message: "sendMealPushNotification failed with error: \(errorMessage ?? "unknown error")"
+                    )
                     alertType = .statusFailure
                 }
                 showAlert = true

@@ -1,14 +1,10 @@
-//
-//  BolusView.swift
-//  LoopFollow
-//
-//  Created by Jonas Björkert on 2024-08-25.
-//  Copyright © 2024 Jon Fawcett. All rights reserved.
-//
+// LoopFollow
+// BolusView.swift
+// Created by Jonas Björkert.
 
-import SwiftUI
 import HealthKit
 import LocalAuthentication
+import SwiftUI
 
 struct BolusView: View {
     @Environment(\.presentationMode) private var presentationMode
@@ -119,10 +115,12 @@ struct BolusView: View {
                 isLoading = false
                 if success {
                     statusMessage = "Bolus command sent successfully."
+                    LogManager.shared.log(category: .apns, message: "sendBolusPushNotification succeeded - Bolus: \(bolusAmount.doubleValue(for: .internationalUnit())) U")
                     bolusAmount = HKQuantity(unit: .internationalUnit(), doubleValue: 0.0)
                     alertType = .statusSuccess
                 } else {
                     statusMessage = errorMessage ?? "Failed to send bolus command."
+                    LogManager.shared.log(category: .apns, message: "sendBolusPushNotification failed with error: \(errorMessage ?? "unknown error")")
                     alertType = .statusFailure
                 }
                 showAlert = true

@@ -1,13 +1,11 @@
-//
-//  BackgroundRefreshSettingsView.swift
-//  LoopFollow
-//
+// LoopFollow
+// BackgroundRefreshSettingsView.swift
+// Created by Jonas Björkert.
 
 import SwiftUI
 
 struct BackgroundRefreshSettingsView: View {
     @ObservedObject var viewModel: BackgroundRefreshSettingsViewModel
-    @Environment(\.presentationMode) var presentationMode
     @State private var forceRefresh = false
     @State private var timer: Timer?
 
@@ -23,14 +21,6 @@ struct BackgroundRefreshSettingsView: View {
                     availableDevicesSection
                 }
             }
-            .navigationBarTitle("Background Refresh Settings", displayMode: .inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            }
             .onAppear {
                 startTimer()
             }
@@ -38,6 +28,8 @@ struct BackgroundRefreshSettingsView: View {
                 stopTimer()
             }
         }
+        .preferredColorScheme(Storage.shared.forceDarkMode.value ? .dark : nil)
+        .navigationBarTitle("Background Refresh Settings", displayMode: .inline)
     }
 
     // MARK: - Subviews / Computed Properties
@@ -76,6 +68,11 @@ struct BackgroundRefreshSettingsView: View {
                     Text("Requires a Dexcom G6/ONE/G7/ONE+ transmitter within Bluetooth range. Provides updates every 5 minutes and uses less battery than the silent tune method. If you have more than one device to choose from, select the one with the smallest expected bg delay.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
+
+                case .omnipodDash:
+                    Text("Requires an OmniPod DASH pod paired with this device within Bluetooth range. Provides updates once every 3 minutes and uses less battery than the silent tune method.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -91,8 +88,7 @@ struct BackgroundRefreshSettingsView: View {
 
                     deviceConnectionStatus(for: storedDevice)
 
-                    if(storedDevice.rssi != 0)
-                    {
+                    if storedDevice.rssi != 0 {
                         Text("RSSI: \(storedDevice.rssi) dBm")
                             .foregroundColor(.secondary)
                             .font(.footnote)

@@ -1,20 +1,16 @@
-//
-//  LoopOverrideView.swift
-//  LoopFollow
-//
-//  Created by Jonas Björkert on 2025-01-14.
-//  Copyright © 2025 Jon Fawcett. All rights reserved.
-//
+// LoopFollow
+// LoopOverrideView.swift
+// Created by Jonas Björkert.
 
-import SwiftUI
 import HealthKit
+import SwiftUI
 
 struct LoopOverrideView: View {
     @Environment(\.presentationMode) private var presentationMode
 
-    @ObservedObject var device = ObservableUserDefaults.shared.device
+    @ObservedObject var device = Storage.shared.device
     @ObservedObject var overrideNote = Observable.shared.override
-    @ObservedObject var nsAdmin = ObservableUserDefaults.shared.nsWriteAuth
+    @ObservedObject var nsAdmin = Storage.shared.nsWriteAuth
 
     @StateObject private var viewModel = LoopOverrideViewModel()
 
@@ -52,7 +48,6 @@ struct LoopOverrideView: View {
                         message: "Please update your token to include the 'admin' role in order to do remote commands with Loop."
                     )
                 } else {
-
                     Form {
                         if let activeNote = overrideNote.value {
                             Section(header: Text("Active Override")) {
@@ -104,7 +99,7 @@ struct LoopOverrideView: View {
                                                     .foregroundColor(.secondary)
                                                 if !override.targetRange.isEmpty {
                                                     let range = override.targetRange.map { Localizer.formatQuantity($0) }.joined(separator: " - ")
-                                                    Text("Target Range: \(range) \(UserDefaultsRepository.getPreferredUnit().localizedShortUnitString)")
+                                                    Text("Target Range: \(range) \(Localizer.getPreferredUnit().localizedShortUnitString)")
                                                         .font(.subheadline)
                                                         .foregroundColor(.secondary)
                                                 }
@@ -177,6 +172,7 @@ struct LoopOverrideView: View {
     }
 
     // MARK: - Functions
+
     private func formattedDuration(from duration: Int?) -> String {
         guard let duration = duration, duration != 0 else {
             return "Indefinitely"
@@ -201,9 +197,11 @@ struct LoopOverrideView: View {
             if success {
                 self.statusMessage = "Override command sent successfully."
                 self.alertType = .statusSuccess
+                LogManager.shared.log(category: .nightscout, message: "LoopOverrideView: sendActivateOverrideRequest succeeded for override: \(override.name)")
             } else {
                 self.statusMessage = message ?? "Failed to send override command."
                 self.alertType = .statusFailure
+                LogManager.shared.log(category: .nightscout, message: "LoopOverrideView: sendActivateOverrideRequest failed for override: \(override.name) with error: \(message ?? "unknown error")")
             }
             self.showAlert = true
         }
@@ -216,9 +214,11 @@ struct LoopOverrideView: View {
             if success {
                 self.statusMessage = "Cancellation request successfully sent to Nightscout."
                 self.alertType = .statusSuccess
+                LogManager.shared.log(category: .nightscout, message: "LoopOverrideView: sendCancelOverrideRequest succeeded")
             } else {
-                self.statusMessage = message ?? "Failed to cancel temp target."
+                self.statusMessage = message ?? "Failed to cancel override."
                 self.alertType = .statusFailure
+                LogManager.shared.log(category: .nightscout, message: "LoopOverrideView: sendCancelOverrideRequest failed with error: \(message ?? "unknown error")")
             }
             self.showAlert = true
         }
